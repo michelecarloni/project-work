@@ -193,8 +193,8 @@ class ThiefSolver:
                 writer.writerow([gen + 1, best_fitness, avg_fitness, generations_without_improvement])
             
             # --- CATACLYSM / PERTURBATION STRATEGY ---
-            # if generations_without_improvement >= 50:
-            #     print(f"   -> Stagnation detected (Gen {gen+1}). Triggering Perturbation!")
+            if generations_without_improvement >= 50:
+                # print(f"   -> Stagnation detected (Gen {gen+1}). Triggering Perturbation!")
                 
                 # Keep Elites (Top 2)
                 new_pop = [copy.deepcopy(x[1]) for x in scored_pop[:elitism_size]]
