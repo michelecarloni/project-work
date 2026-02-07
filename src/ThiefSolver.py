@@ -1,341 +1,257 @@
-import math
-import random
-import time
+import networkx as nx
 import numpy as np
-from scipy.spatial import KDTree
+import random
+import copy
 
 class ThiefSolver:
-    """
-    Solves the Travelling Thief Problem using Iterated Local Search (ILS).
-    The thief can make multiple trips back to the main city to deposit gold.
-    
-    The algorithm works in two phases:
-    1. Tour Construction: Creates a giant tour visiting all cities using nearest neighbor heuristic
-    2. Split Algorithm: Optimally divides the giant tour into multiple trips that return to base
-    """
-    
     def __init__(self, problem):
         self.problem = problem
-        self.num_cities = len(problem.graph.nodes)
-        self.alpha_weight = problem.alpha
-        self.beta_weight = problem.beta
+        self.graph = problem.graph
+        self.num_nodes = len(self.graph.nodes)
+        self.alpha = problem.alpha
+        self.beta = problem.beta
         
-        # --- FAST DATA EXTRACTION ---
-        G = problem.graph
-        self.coords = np.array([G.nodes[i]['pos'] for i in range(self.num_cities)])
-        self.golds = np.array([G.nodes[i]['gold'] for i in range(self.num_cities)])
+        # Pre-calculate data for efficiency
+        self.gold_map = {node: self.graph.nodes[node]['gold'] for node in self.graph.nodes}
+        self.dist_matrix, self.beta_matrix = self._calculate_complex_matrices()
         
-        # --- PRECOMPUTE NEIGHBORS (KD-Tree) ---
-        # Used for Nearest Neighbor initialization
-        self.kdtree = KDTree(self.coords)
-        self.dist_matrix = {}  # Cache for distances to avoid re-calc
+        # GA Hyperparameters - Scaled for Problem Size
+        # Smaller population/generations for larger N to save time
+        self.pop_size = 200 if self.num_nodes <= 100 else 100
+        self.generations = 1000 if self.num_nodes <= 100 else 500
+        self.mutation_rate = 0.2
+        self.elitism_size = 2
 
-    def get_dist(self, u, v):
-        """Fast distance with caching"""
-        if u > v:
-            u, v = v, u
-        if (u, v) in self.dist_matrix:
-            return self.dist_matrix[(u, v)]
-        
-        d = self.coords[u] - self.coords[v]
-        dist = math.sqrt(d[0]**2 + d[1]**2)
-        self.dist_matrix[(u, v)] = dist
-        return dist
+    def _calculate_complex_matrices(self):
+        """
+        Pre-calculates edge-wise distances for the non-linear cost formula.
+        Logic adapted from
+        """
+        d_mat = np.zeros((self.num_nodes, self.num_nodes))
+        b_mat = np.zeros((self.num_nodes, self.num_nodes))
+        path_gen = nx.all_pairs_dijkstra_path(self.graph, weight='dist')
 
-    def filter_profitable_cities(self):
+        for source, paths_dict in path_gen:
+            for target, path in paths_dict.items():
+                if source == target: continue
+                l_sum, b_sum = 0.0, 0.0
+                for i in range(len(path) - 1):
+                    d = self.graph[path[i]][path[i+1]]['dist']
+                    l_sum += d
+                    b_sum += d ** self.beta
+                d_mat[source][target] = l_sum
+                b_mat[source][target] = b_sum
+        return d_mat, b_mat
+
+    def _step_cost(self, d_linear, d_beta, weight):
         """
-        Filter out cities where the cost of visiting might exceed the benefit.
-        For very high beta/alpha, some cities may not be worth visiting.
-        Returns set of potentially profitable city indices.
+        Calculates cost for a path segment.
+        Formula: Cost = d_linear + (alpha * weight)^beta * d_beta
+        Derived from
         """
-        if self.beta_weight < 1.5 or self.num_cities < 500:
-            # For small problems or low beta, visit all cities
-            return set(range(self.num_cities))
+        if weight == 0: return d_linear
+        return d_linear + ((self.alpha * weight) ** self.beta) * d_beta
+
+    def _evaluate(self, genome):
+        """
+        Greedy Split Heuristic:
+        Iterates through the 'logical' genome (permutation of cities).
+        Decides whether to extend the current trip or return to base (0) 
+        based on which option is locally cheaper.
+        Logic adapted from
+        """
+        total_cost = 0.0
+        current_node = 0
+        current_weight = 0.0
+        logical_path = [] # Stores sequence like [0, 5, 12, 0, 3, ...]
+        trip_cost = 0.0
+
+        for next_city in genome:
+            gold_at_next = self.gold_map[next_city]
+            
+            # Cost to GO to next city
+            cost_to_next = self._step_cost(self.dist_matrix[current_node][next_city], 
+                                           self.beta_matrix[current_node][next_city], current_weight)
+            new_weight = current_weight + gold_at_next
+            
+            # Cost if we were to return AFTER next city
+            cost_return_after = self._step_cost(self.dist_matrix[next_city][0], 
+                                                self.beta_matrix[next_city][0], new_weight)
+            
+            # Alternative: Return NOW, then go to next city
+            cost_return_now = self._step_cost(self.dist_matrix[current_node][0], 
+                                              self.beta_matrix[current_node][0], current_weight)
+            cost_out_empty = self.dist_matrix[0][next_city] # Weight is 0
+            cost_return_new = self._step_cost(self.dist_matrix[next_city][0], 
+                                              self.beta_matrix[next_city][0], gold_at_next)
+
+            # Compare: (Extend Trip) vs (Split Trip)
+            scenario_extend = trip_cost + cost_to_next + cost_return_after
+            scenario_split = trip_cost + cost_return_now + cost_out_empty + cost_return_new
+
+            if scenario_extend <= scenario_split:
+                # Extend
+                trip_cost += cost_to_next
+                current_weight = new_weight
+                current_node = next_city
+                logical_path.append(next_city)
+            else:
+                # Split (Return to base)
+                total_cost += (trip_cost + cost_return_now)
+                logical_path.extend([0, next_city])
+                current_node = next_city
+                current_weight = gold_at_next
+                trip_cost = cost_out_empty
+
+        # Close the final loop (return to base)
+        total_cost += (trip_cost + self._step_cost(self.dist_matrix[current_node][0], 
+                                                   self.beta_matrix[current_node][0], current_weight))
+        logical_path.append(0)
+        return total_cost, logical_path
+
+    def _reconstruct_path(self, logical_path):
+        """
+        Converts logical stops into the final physical path.
+        Rules:
+        1. Follow shortest path between logical nodes.
+        2. Record EVERY node visited.
+        3. Collect gold the FIRST time a node is visited.
+        """
+        physical_path = []
+        current_node = 0
+        collected_cities = set()
+        collected_cities.add(0) # Base has no gold
+
+        for target in logical_path:
+            if target == current_node:
+                continue
+                
+            # Get physical segment (e.g., [0, 5, 12])
+            segment = nx.shortest_path(self.graph, source=current_node, target=target, weight='dist')
+            
+            # Iterate through segment (skipping start node as it's already recorded)
+            for node in segment[1:]:
+                gold_val = 0.0
+                if node not in collected_cities:
+                    gold_val = float(round(self.gold_map[node], 2))
+                    collected_cities.add(node)
+                
+                physical_path.append((int(node), gold_val))
+            
+            current_node = target
+
+        # Ensure path ends at (0, 0.0)
+        if not physical_path or physical_path[-1][0] != 0:
+            physical_path.append((0, 0.0))
+            
+        return physical_path
+
+    def _calculate_true_cost(self, physical_path):
+        """
+        Recalculates the exact cost of the physical path to ensure accuracy.
+        """
+        total_cost = 0.0
+        current_weight = 0.0
+        current_node = 0 # Start at base
         
-        profitable = {0}  # Base is always included
-        for city in range(1, self.num_cities):
-            # Simple heuristic: estimate if gold value justifies the trip cost
-            dist = self.get_dist(0, city)
-            gold = self.golds[city]
-            # Rough cost estimate for round trip with gold
-            approx_cost = 2 * dist + (self.alpha_weight * dist * gold) ** self.beta_weight
-            # If gold seems valuable relative to cost, keep it
-            if gold > approx_cost / 50:  # Lenient threshold
-                profitable.add(city)
-        
-        # Ensure we visit at least some cities (even if marginally profitable)
-        if len(profitable) < max(10, self.num_cities // 10):
-            return set(range(self.num_cities))
-        
-        return profitable
+        for next_node, gold_collected in physical_path:
+            dist = self.problem.graph[current_node][next_node]['dist']
+            
+            # Calculate cost for this single edge
+            # Note: For single edge, dist_linear = dist_beta = dist (since it's 1 edge)
+            # But mathematically (d^beta) is what we need.
+            d_beta = dist ** self.beta
+            
+            cost = self._step_cost(dist, d_beta, current_weight)
+            total_cost += cost
+            
+            # Update state
+            current_weight += gold_collected
+            if next_node == 0:
+                current_weight = 0.0 # Reset weight at base
+            
+            current_node = next_node
+            
+        return total_cost
 
     def getSolution(self):
         """
-        Main solver method that returns the optimal path and total cost.
-        
-        Returns:
-            tuple: (path, total_cost) where path is a list of (city, gold) tuples
-                   ending with (0, 0) to indicate return to base
+        Main execution method.
+        Returns: (path_list, total_cost)
         """
-        start_time = time.time()
-        TIME_LIMIT = 10
+        # Initialize population
+        cities = list(range(1, self.num_nodes))
+        population = [random.sample(cities, len(cities)) for _ in range(self.pop_size)]
         
-        # Filter cities for difficult problems
-        self.profitable_cities = self.filter_profitable_cities()
-        
-        # 1. INITIALIZATION - Try multiple initial solutions
-        initial_solutions = []
-        
-        # Solution 1: Standard nearest neighbor
-        tour1 = self.get_nearest_neighbor_tour()
-        plan1, cost1 = self.split(tour1)
-        initial_solutions.append((tour1, plan1, cost1))
-        
-        # Solution 2: Random start nearest neighbor (if time allows)
-        if self.num_cities > 100:
-            tour2 = self.get_nearest_neighbor_tour(random_start=True)
-            plan2, cost2 = self.split(tour2)
-            initial_solutions.append((tour2, plan2, cost2))
-        
-        # Select best initial solution
-        current_tour, current_plan, current_cost = min(initial_solutions, key=lambda x: x[2])
-        
-        # Evaluate initial solution using split algorithm
-        current_plan, current_cost = self.split(current_tour)
-        
-        best_tour = list(current_tour)
-        best_cost = current_cost
-        best_plan = current_plan
-        
-        # ILS Loop
-        iteration = 0
-        max_no_improve = 50
-        no_improve_count = 0
-        
-        while (time.time() - start_time) < TIME_LIMIT:
-            iteration += 1
-            
-            # --- STEP 1: PERTURBATION (Kick) ---
-            if iteration > 1:
-                candidate_tour = self.double_bridge_move(current_tour)
-            else:
-                candidate_tour = list(current_tour)
-            
-            # Calculate cost after perturbation
-            _, candidate_cost = self.split(candidate_tour)
-            
-            # --- STEP 2: LOCAL SEARCH (2-Opt) ---
-            improved = True
-            ls_iter = 0
-            # Adaptive iterations based on problem size
-            MAX_LS_STEPS = min(500, 100 + self.num_cities // 5)
-            
-            while improved and ls_iter < MAX_LS_STEPS:
-                improved = False
-                ls_iter += 1
-                
-                # Try random 2-opt moves
-                for _ in range(20):
-                    i = random.randint(1, self.num_cities - 4)
-                    j = random.randint(i + 2, self.num_cities - 2)
-                    
-                    # Perform 2-opt: reverse segment between i and j
-                    new_tour = candidate_tour[:i+1] + candidate_tour[i+1:j+1][::-1] + candidate_tour[j+1:]
-                    
-                    # Check Cost
-                    _, new_cost = self.split(new_tour)
+        best_fitness = float('inf')
+        best_logical_path = []
 
-                    if new_cost < candidate_cost:
-                        candidate_tour = new_tour
-                        candidate_cost = new_cost
-                        improved = True
-                        break  # Accept first improvement
-                
-            # --- STEP 3: ACCEPTANCE ---
-            if candidate_cost < current_cost:
-                current_tour = candidate_tour
-                current_cost = candidate_cost
-                current_plan, _ = self.split(current_tour)
-                no_improve_count = 0
-                
-                # Check Global Best
-                if current_cost < best_cost:
-                    best_cost = current_cost
-                    best_tour = list(current_tour)
-                    best_plan = current_plan
-            else:
-                no_improve_count += 1
-                if no_improve_count > max_no_improve:
-                    # Restart with a new random solution
-                    current_tour = self.get_nearest_neighbor_tour(random_start=True)
-                    _, current_cost = self.split(current_tour)
-                    no_improve_count = 0
-                    
-        return best_plan, best_cost
+        # Evolution Loop
+        for gen in range(self.generations):
+            scored_pop = []
+            
+            # Evaluation
+            for ind in population:
+                cost, l_path = self._evaluate(ind)
+                scored_pop.append((cost, ind, l_path))
+            
+            # Sort by cost (lowest is best)
+            scored_pop.sort(key=lambda x: x[0])
+            
+            # Elitism Update
+            if scored_pop[0][0] < best_fitness:
+                best_fitness = scored_pop[0][0]
+                best_logical_path = scored_pop[0][2]
 
-    def double_bridge_move(self, tour):
-        """
-        A 'Kick' operator that disrupts the tour more than a 2-opt/3-opt 
-        but preserves the 4 segments' internal structure.
-        Good for escaping local optima in TSP.
-        
-        Splits tour into 4 segments and reconnects them in a different order.
-        """
-        n = len(tour)
-        if n < 8:
-            return tour  # Too small
-        
-        # Select 3 random cut points
-        pos = sorted(random.sample(range(1, n - 1), 3))
-        a, b, c = pos
-        
-        # Split into 4 segments and reconnect
-        s1 = tour[:a]
-        s2 = tour[a:b]
-        s3 = tour[b:c]
-        s4 = tour[c:]
-        
-        return s1 + s4 + s3 + s2
+            # Selection & Crossover
+            new_pop = [copy.deepcopy(x[1]) for x in scored_pop[:self.elitism_size]]
+            
+            # Tournament Selection + OX1 Crossover
+            while len(new_pop) < self.pop_size:
+                # Random tournament of size 5
+                p1_candidates = random.sample(scored_pop, 5)
+                p1 = min(p1_candidates, key=lambda x: x[0])[1]
+                
+                p2_candidates = random.sample(scored_pop, 5)
+                p2 = min(p2_candidates, key=lambda x: x[0])[1]
+                
+                child = self._ox1(p1, p2)
+                
+                # Mutation (Inversion)
+                if random.random() < self.mutation_rate:
+                    self._mutate(child)
+                
+                new_pop.append(child)
+            
+            population = new_pop
 
-    def get_nearest_neighbor_tour(self, random_start=False):
-        """
-        Constructs a greedy Nearest Neighbor tour.
-        If random_start=True, picks a random city as "start" (after base).
-        Only visits cities in self.profitable_cities if filtering is active.
-        """
-        visited = {0}
-        tour = [0]
-        curr = 0
+        # Final Reconstruction
+        physical_path = self._reconstruct_path(best_logical_path)
+        true_cost = self._calculate_true_cost(physical_path)
         
-        # Determine which cities to visit
-        cities_to_visit = self.profitable_cities if hasattr(self, 'profitable_cities') else set(range(self.num_cities))
-        
-        # If random start, pick the first node randomly from profitable cities
-        if random_start:
-            candidates = list(cities_to_visit - {0})
-            if candidates:
-                first = random.choice(candidates)
-                tour.append(first)
-                visited.add(first)
-                curr = first
-            
-        while len(visited) < len(cities_to_visit):
-            # Fast lookup with KDTree
-            dists, indices = self.kdtree.query(self.coords[curr], k=min(20, len(cities_to_visit)))
-            
-            found = False
-            for idx in indices:
-                if idx not in visited and idx in cities_to_visit:
-                    next_node = idx
-                    found = True
-                    break
-            
-            if not found:
-                remaining = list(cities_to_visit - visited)
-                if not remaining:
-                    break
-                next_node = remaining[0]
-            
-            tour.append(next_node)
-            visited.add(next_node)
-            curr = next_node
-            
-        return tour
+        return physical_path, true_cost
 
-    def split(self, tour):
-        """
-        Split Algorithm: Cuts the giant tour into optimal trips.
+    def _ox1(self, p1, p2):
+        """Order Crossover 1"""
+        size = len(p1)
+        a, b = sorted(random.sample(range(size), 2))
+        child = [-1] * size
+        child[a:b] = p1[a:b]
         
-        This is the key algorithm that allows multiple trips. It uses dynamic 
-        programming to find the optimal way to split a giant tour into multiple 
-        trips that return to the base city after collecting gold.
+        # Optimization: Use set for O(1) lookups
+        child_set = set(p1[a:b])
         
-        Args:
-            tour: A list of city indices representing a giant tour
-            
-        Returns:
-            tuple: (path, total_cost) where path is formatted as 
-                   [(city1, gold1), (city2, gold2), ..., (0, 0), ...]
-                   with (0, 0) marking the end of each trip
-        """
-        cities = tour[1:]  # Cities to visit (excluding base city 0)
-        n = len(cities)
-        
-        # Dynamic programming arrays
-        V = np.full(n + 1, float('inf'))
-        V[0] = 0
-        parent = np.zeros(n + 1, dtype=int)
-        
-        alpha = self.alpha_weight
-        beta = self.beta_weight
-        golds = self.golds
-        
-        # Adaptive Window Size based on beta and problem size
-        # High beta = expensive to carry gold = shorter trips needed
-        # Large N = need smaller windows relative to problem size
-        if beta > 1.5:
-            if n > 500:  # Large problem
-                WINDOW = min(4, max(2, int(n * 0.003)))
-            else:
-                WINDOW = 6
-        elif beta > 1.0:
-            WINDOW = min(12, max(6, int(n * 0.01)))
-        else:
-            WINDOW = min(25, max(10, int(n * 0.03)))
-            
-        # Dynamic programming to find optimal split
-        for j in range(n):
-            if V[j] == float('inf'):
-                continue
-            
-            current_gold = 0
-            current_cost = 0
-            u = 0  # Start at Base
-            
-            # Forward trip construction
-            for k in range(1, WINDOW + 1):
-                if j + k > n:
-                    break
-                
-                v = cities[j + k - 1]
-                
-                # Travel u -> v
-                d = self.get_dist(u, v)
-                
-                if current_gold > 0:
-                    current_cost += d + (alpha * d * current_gold) ** beta
-                else:
-                    current_cost += d
-                
-                current_gold += golds[v]
-                
-                # Return v -> Base
-                d_return = self.get_dist(v, 0)
-                return_cost = d_return + (alpha * d_return * current_gold) ** beta
-                
-                total = current_cost + return_cost
-                
-                target = j + k
-                if V[j] + total < V[target]:
-                    V[target] = V[j] + total
-                    parent[target] = j
-                
-                u = v
-        
-        # Reconstruct path
-        chunks = []
-        curr = n
-        while curr > 0:
-            prev = parent[curr]
-            segment = cities[prev:curr]
-            chunk = []
-            for node in segment:
-                chunk.append((node, golds[node]))
-            chunk.append((0, 0))  # Return to base
-            chunks.append(chunk)
-            curr = prev
-            
-        chunks.reverse()
-        flat_path = [step for sublist in chunks for step in sublist]
-        
-        return flat_path, V[n]
+        p2_ptr = 0
+        for i in range(size):
+            if child[i] == -1:
+                while p2[p2_ptr] in child_set:
+                    p2_ptr += 1
+                val = p2[p2_ptr]
+                child[i] = val
+                child_set.add(val)
+        return child
+
+    def _mutate(self, ind):
+        """Inversion Mutation"""
+        a, b = sorted(random.sample(range(len(ind)), 2))
+        ind[a:b+1] = ind[a:b+1][::-1]
