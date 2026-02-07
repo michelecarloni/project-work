@@ -16,7 +16,6 @@ class ThiefSolver:
         self.dist_matrix, self.beta_matrix = self._calculate_complex_matrices()
         
         # GA Hyperparameters - Scaled for Problem Size
-        # Smaller population/generations for larger N to save time
         self.pop_size = 200 if self.num_nodes <= 100 else 100
         self.generations = 1000 if self.num_nodes <= 100 else 500
         self.mutation_rate = 0.2
@@ -25,7 +24,7 @@ class ThiefSolver:
     def _calculate_complex_matrices(self):
         """
         Pre-calculates edge-wise distances for the non-linear cost formula.
-        Logic adapted from
+        Uses Dijkstra to ensure we sum d^beta correctly along the physical shortest path.
         """
         d_mat = np.zeros((self.num_nodes, self.num_nodes))
         b_mat = np.zeros((self.num_nodes, self.num_nodes))
@@ -47,7 +46,6 @@ class ThiefSolver:
         """
         Calculates cost for a path segment.
         Formula: Cost = d_linear + (alpha * weight)^beta * d_beta
-        Derived from
         """
         if weight == 0: return d_linear
         return d_linear + ((self.alpha * weight) ** self.beta) * d_beta
@@ -58,12 +56,11 @@ class ThiefSolver:
         Iterates through the 'logical' genome (permutation of cities).
         Decides whether to extend the current trip or return to base (0) 
         based on which option is locally cheaper.
-        Logic adapted from
         """
         total_cost = 0.0
         current_node = 0
         current_weight = 0.0
-        logical_path = [] # Stores sequence like [0, 5, 12, 0, 3, ...]
+        logical_path = [] # Stores sequence like [5, 12, 0, 3, ...]
         trip_cost = 0.0
 
         for next_city in genome:
@@ -98,6 +95,7 @@ class ThiefSolver:
             else:
                 # Split (Return to base)
                 total_cost += (trip_cost + cost_return_now)
+                # We record 0 (base) and then the next city
                 logical_path.extend([0, next_city])
                 current_node = next_city
                 current_weight = gold_at_next
@@ -112,29 +110,29 @@ class ThiefSolver:
     def _reconstruct_path(self, logical_path):
         """
         Converts logical stops into the final physical path.
-        Rules:
-        1. Follow shortest path between logical nodes.
-        2. Record EVERY node visited.
-        3. Collect gold the FIRST time a node is visited.
+        Strategy: Target-Only Pickup.
+        We only pick up gold when we reach the specific 'target' city dictated by the GA.
+        Intermediate cities are visited (recorded in path) but NOT looted yet.
         """
         physical_path = []
         current_node = 0
-        collected_cities = set()
-        collected_cities.add(0) # Base has no gold
-
+        
         for target in logical_path:
             if target == current_node:
                 continue
-                
-            # Get physical segment (e.g., [0, 5, 12])
+            
+            # Get physical segment (e.g., [current, transit, target])
             segment = nx.shortest_path(self.graph, source=current_node, target=target, weight='dist')
             
-            # Iterate through segment (skipping start node as it's already recorded)
+            # Iterate segment starting from index 1 to skip duplicate start node
             for node in segment[1:]:
                 gold_val = 0.0
-                if node not in collected_cities:
+                
+                # CRITICAL FIX: Only pick up gold if this node is the *current target*.
+                # We treat all other nodes as "transit only" (0.0 gold) for now.
+                # They will be picked up later when they become the target.
+                if node == target and node != 0:
                     gold_val = float(round(self.gold_map[node], 2))
-                    collected_cities.add(node)
                 
                 physical_path.append((int(node), gold_val))
             
@@ -158,8 +156,6 @@ class ThiefSolver:
             dist = self.problem.graph[current_node][next_node]['dist']
             
             # Calculate cost for this single edge
-            # Note: For single edge, dist_linear = dist_beta = dist (since it's 1 edge)
-            # But mathematically (d^beta) is what we need.
             d_beta = dist ** self.beta
             
             cost = self._step_cost(dist, d_beta, current_weight)
@@ -179,7 +175,6 @@ class ThiefSolver:
         Main execution method.
         Returns: (path_list, total_cost)
         """
-        # Initialize population
         cities = list(range(1, self.num_nodes))
         population = [random.sample(cities, len(cities)) for _ in range(self.pop_size)]
         
@@ -206,18 +201,13 @@ class ThiefSolver:
             # Selection & Crossover
             new_pop = [copy.deepcopy(x[1]) for x in scored_pop[:self.elitism_size]]
             
-            # Tournament Selection + OX1 Crossover
             while len(new_pop) < self.pop_size:
-                # Random tournament of size 5
-                p1_candidates = random.sample(scored_pop, 5)
-                p1 = min(p1_candidates, key=lambda x: x[0])[1]
-                
-                p2_candidates = random.sample(scored_pop, 5)
-                p2 = min(p2_candidates, key=lambda x: x[0])[1]
+                # Tournament
+                p1 = min(random.sample(scored_pop, 5), key=lambda x: x[0])[1]
+                p2 = min(random.sample(scored_pop, 5), key=lambda x: x[0])[1]
                 
                 child = self._ox1(p1, p2)
                 
-                # Mutation (Inversion)
                 if random.random() < self.mutation_rate:
                     self._mutate(child)
                 
@@ -232,13 +222,13 @@ class ThiefSolver:
         return physical_path, true_cost
 
     def _ox1(self, p1, p2):
-        """Order Crossover 1"""
+        """Order Crossover 1 with O(1) optimization."""
         size = len(p1)
         a, b = sorted(random.sample(range(size), 2))
         child = [-1] * size
         child[a:b] = p1[a:b]
         
-        # Optimization: Use set for O(1) lookups
+        # Optimization: Use set for O(1) lookups to handle N=1000
         child_set = set(p1[a:b])
         
         p2_ptr = 0
