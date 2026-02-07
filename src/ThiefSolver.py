@@ -155,7 +155,7 @@ class ThiefSolver:
 
         # Prepare CSV Writer
         # N=1000, d=0.2, a=1, b=2 -> "tests/prob_0.2_1_2.csv"
-        csv_filename = f"prob_{round(self.density, 1)}_{round(self.alpha, 1)}_{round(self.beta, 1)}.csv"
+        csv_filename = f"prob_{self.num_nodes}_{round(self.density, 1)}_{round(self.alpha, 1)}_{round(self.beta, 1)}.csv"
         csv_dir = "tests"
         if not os.path.exists(csv_dir):
             os.makedirs(csv_dir)
