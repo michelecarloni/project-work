@@ -2,6 +2,8 @@ import networkx as nx
 import numpy as np
 import random
 import copy
+import os
+import csv
 
 # =========================================================
 # STANDALONE EVALUATOR (Fastest Python option)
@@ -97,9 +99,8 @@ class ThiefSolver:
         self.beta_matrix = b_mat_np.tolist()
         
         # PARAMETER TUNING
-        # Increased Pop Size for better exploration since we have speed now
         self.pop_size = 200 if self.num_nodes <= 100 else 150 
-        self.generations = 1000 if self.num_nodes <= 100 else 800
+        self.generations = 1000 if self.num_nodes <= 100 else 600
         self.mutation_rate = 0.2
         self.elitism_size = 2
         self.tournament_size = 5
@@ -138,6 +139,9 @@ class ThiefSolver:
         best_fitness = float('inf')
         best_genome = None
         
+        # History Tracking
+        fitness_history = []
+        
         generations_without_improvement = 0
         current_mutation_rate = self.mutation_rate
 
@@ -151,13 +155,30 @@ class ThiefSolver:
         alpha = self.alpha
         beta = self.beta
 
+        # Prepare CSV Writer
+        # N=1000, d=0.2, a=1, b=2 -> "tests/prob_0.2_1_2.csv"
+        csv_filename = f"prob_{self.problem.density}_{self.alpha}_{self.beta}.csv"
+        csv_dir = "tests"
+        if not os.path.exists(csv_dir):
+            os.makedirs(csv_dir)
+        csv_path = os.path.join(csv_dir, csv_filename)
+        
+        # Open file and write header
+        with open(csv_path, mode='w', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow(["Generation", "Best_Cost", "Avg_Cost", "Stagnation_Count"])
+
         for gen in range(self.generations):
             scored_pop = []
+            sum_fitness = 0.0
+            
             for ind in population:
                 cost, _ = fast_evaluate(ind, dist_matrix, beta_matrix, gold_map, alpha, beta)
                 scored_pop.append((cost, ind))
+                sum_fitness += cost
             
             scored_pop.sort(key=lambda x: x[0])
+            avg_fitness = sum_fitness / pop_size
             
             # Elitism & Improvement Check
             if scored_pop[0][0] < best_fitness:
@@ -168,37 +189,41 @@ class ThiefSolver:
             else:
                 generations_without_improvement += 1
             
+            # Record History (Memory)
+            fitness_history.append(best_fitness)
+            
+            # Append to CSV (Disk)
+            with open(csv_path, mode='a', newline='') as f:
+                writer = csv.writer(f)
+                writer.writerow([gen + 1, best_fitness, avg_fitness, generations_without_improvement])
+            
             # --- CATACLYSM / PERTURBATION STRATEGY ---
-            # If stuck for 50 generations, trigger a massive shake-up
-            # if generations_without_improvement >= 50:
-            #     print(f"   -> Stagnation detected (Gen {gen+1}). Triggering Perturbation!")
+            if generations_without_improvement >= 50:
+                print(f"   -> Stagnation detected (Gen {gen+1}). Triggering Perturbation!")
                 
                 # Keep Elites (Top 2)
                 new_pop = [copy.deepcopy(x[1]) for x in scored_pop[:elitism_size]]
                 
                 # Strategy: 50% Mutated Clones of Best, 50% Random
                 num_mutated = (pop_size - elitism_size) // 2
-                
-                # Add Heavily Mutated Clones of the Best
                 best_ind = scored_pop[0][1]
+                
                 for _ in range(num_mutated):
                     clone = copy.deepcopy(best_ind)
-                    # Apply multiple mutations to "shake" it
-                    self._scramble_mutation(clone) # Stronger than inversion
+                    self._scramble_mutation(clone) # Shake it up
                     self._mutate(clone)
                     new_pop.append(clone)
                 
-                # Add Pure Random Individuals (Fresh Blood)
                 while len(new_pop) < pop_size:
                     new_pop.append(random.sample(cities, len(cities)))
                 
                 population = new_pop
-                generations_without_improvement = 0 # Reset counter
-                continue # Skip standard selection/crossover for this gen
+                generations_without_improvement = 0 
+                continue 
 
             # Standard Evolution
             if (gen + 1) % 50 == 0:
-                print(f"Gen {gen+1}/{self.generations} - Best: {best_fitness:,.2f}")
+                print(f"Gen {gen+1}/{self.generations} - Best: {best_fitness:,.2f} | Avg: {avg_fitness:,.2f}")
 
             new_pop = [copy.deepcopy(x[1]) for x in scored_pop[:elitism_size]]
             
@@ -216,10 +241,16 @@ class ThiefSolver:
             population = new_pop
 
         # RECONSTRUCTION
-        best_logical_path = self._reconstruct_logical_path(best_genome)        
-        physical_path = self._reconstruct_physical_path(best_logical_path)
+        print("GEN END")
+        print("START RECONSTRUCTION LOGICAL")
+        best_logical_path = self._reconstruct_logical_path(best_genome)
+        print("END RECONSTRUCTION LOGICAL")
         
-        return physical_path
+        print("START RECONSTRUCTION PHYSICAL")
+        physical_path = self._reconstruct_physical_path(best_logical_path)
+        print("END RECONSTRUCTION PHYSICAL")
+        
+        return physical_path, fitness_history
 
     def _reconstruct_logical_path(self, genome):
         logical_path = []
