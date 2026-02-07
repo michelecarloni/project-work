@@ -166,8 +166,8 @@ class ThiefSolver:
                     generations_without_improvement = 0
             
             # Print progress every 50 gens to keep output clean but visible
-            if (gen + 1) % 50 == 0:
-                print(f"Gen {gen+1}/{self.generations} - Best: {best_fitness:,.2f}")
+            # if (gen + 1) % 50 == 0:
+            #     print(f"Gen {gen+1}/{self.generations} - Best: {best_fitness:,.2f}")
 
             new_pop = [copy.deepcopy(x[1]) for x in scored_pop[:elitism_size]]
             
