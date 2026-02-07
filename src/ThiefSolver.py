@@ -81,8 +81,9 @@ class ThiefSolver:
         self.problem = problem
         self.graph = problem.graph
         self.num_nodes = len(self.graph.nodes)
-        self.alpha = problem.alpha
-        self.beta = problem.beta
+        self.density = nx.density(self.graph)
+        self.alpha = self.problem.alpha
+        self.beta = self.problem.beta
         
         # 1. OPTIMIZATION: Gold Map List
         self.gold_map_list = [0.0] * self.num_nodes
@@ -100,7 +101,7 @@ class ThiefSolver:
         
         # PARAMETER TUNING
         self.pop_size = 200 if self.num_nodes <= 100 else 150 
-        self.generations = 1000 if self.num_nodes <= 100 else 600
+        self.generations = 1000 if self.num_nodes <= 100 else 800
         self.mutation_rate = 0.2
         self.elitism_size = 2
         self.tournament_size = 5
@@ -139,9 +140,6 @@ class ThiefSolver:
         best_fitness = float('inf')
         best_genome = None
         
-        # History Tracking
-        fitness_history = []
-        
         generations_without_improvement = 0
         current_mutation_rate = self.mutation_rate
 
@@ -157,7 +155,7 @@ class ThiefSolver:
 
         # Prepare CSV Writer
         # N=1000, d=0.2, a=1, b=2 -> "tests/prob_0.2_1_2.csv"
-        csv_filename = f"prob_{self.problem.density}_{self.alpha}_{self.beta}.csv"
+        csv_filename = f"prob_{round(self.density, 1)}_{round(self.alpha, 1)}_{round(self.beta, 1)}.csv"
         csv_dir = "tests"
         if not os.path.exists(csv_dir):
             os.makedirs(csv_dir)
@@ -188,18 +186,15 @@ class ThiefSolver:
                 current_mutation_rate = self.mutation_rate
             else:
                 generations_without_improvement += 1
-            
-            # Record History (Memory)
-            fitness_history.append(best_fitness)
-            
+                        
             # Append to CSV (Disk)
             with open(csv_path, mode='a', newline='') as f:
                 writer = csv.writer(f)
                 writer.writerow([gen + 1, best_fitness, avg_fitness, generations_without_improvement])
             
             # --- CATACLYSM / PERTURBATION STRATEGY ---
-            if generations_without_improvement >= 50:
-                print(f"   -> Stagnation detected (Gen {gen+1}). Triggering Perturbation!")
+            # if generations_without_improvement >= 50:
+            #     print(f"   -> Stagnation detected (Gen {gen+1}). Triggering Perturbation!")
                 
                 # Keep Elites (Top 2)
                 new_pop = [copy.deepcopy(x[1]) for x in scored_pop[:elitism_size]]
@@ -241,16 +236,10 @@ class ThiefSolver:
             population = new_pop
 
         # RECONSTRUCTION
-        print("GEN END")
-        print("START RECONSTRUCTION LOGICAL")
-        best_logical_path = self._reconstruct_logical_path(best_genome)
-        print("END RECONSTRUCTION LOGICAL")
-        
-        print("START RECONSTRUCTION PHYSICAL")
+        best_logical_path = self._reconstruct_logical_path(best_genome)        
         physical_path = self._reconstruct_physical_path(best_logical_path)
-        print("END RECONSTRUCTION PHYSICAL")
         
-        return physical_path, fitness_history
+        return physical_path
 
     def _reconstruct_logical_path(self, genome):
         logical_path = []
