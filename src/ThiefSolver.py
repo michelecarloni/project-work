@@ -3,7 +3,9 @@ import numpy as np
 import random
 import copy
 
-# Standalone evaluator (Fastest Python option)
+# =========================================================
+# STANDALONE EVALUATOR (Fastest Python option)
+# =========================================================
 def fast_evaluate(genome, dist_matrix, beta_matrix, gold_map, alpha, beta):
     total_cost = 0.0
     current_node = 0
@@ -13,9 +15,11 @@ def fast_evaluate(genome, dist_matrix, beta_matrix, gold_map, alpha, beta):
     for next_city in genome:
         gold_at_next = gold_map[next_city]
         
+        # Fast list access
         d_next = dist_matrix[current_node][next_city]
         b_next = beta_matrix[current_node][next_city]
         
+        # INLINED COST CALCULATION
         if current_weight == 0:
             cost_to_next = d_next
         else:
@@ -59,6 +63,7 @@ def fast_evaluate(genome, dist_matrix, beta_matrix, gold_map, alpha, beta):
             current_weight = gold_at_next
             trip_cost = cost_out_empty
 
+    # Final return
     d_final = dist_matrix[current_node][0]
     b_final = beta_matrix[current_node][0]
     
@@ -83,26 +88,26 @@ class ThiefSolver:
             self.gold_map_list[i] = self.graph.nodes[i]['gold']
 
         # 2. OPTIMIZATION: Path Cache
-        # We will store the full paths here during init so we don't recalculate them later
         self.path_cache = {} 
 
-        print("Initializing Matrices & Caching Paths...")
+        print("Initializing Matrices & Caching Paths (Standard Dijkstra)...")
         d_mat_np, b_mat_np = self._calculate_complex_matrices_and_cache()
         
         self.dist_matrix = d_mat_np.tolist()
         self.beta_matrix = b_mat_np.tolist()
         
-        # Hyperparameters
-        self.pop_size = 200 if self.num_nodes <= 100 else 100
-        self.generations = 1000 if self.num_nodes <= 100 else 500
+        # PARAMETER TUNING
+        # Increased Pop Size for better exploration since we have speed now
+        self.pop_size = 200 if self.num_nodes <= 100 else 150 
+        self.generations = 1000 if self.num_nodes <= 100 else 600
         self.mutation_rate = 0.2
         self.elitism_size = 2
         self.tournament_size = 5
 
     def _calculate_complex_matrices_and_cache(self):
         """
-        Calculates cost matrices AND caches the actual paths.
-        This enables O(1) path reconstruction later.
+        Uses Standard Dijkstra to calculate matrices AND cache paths.
+        Reliable and robust for sparse graphs.
         """
         d_mat = np.zeros((self.num_nodes, self.num_nodes))
         b_mat = np.zeros((self.num_nodes, self.num_nodes))
@@ -136,7 +141,7 @@ class ThiefSolver:
         generations_without_improvement = 0
         current_mutation_rate = self.mutation_rate
 
-        # Local variables
+        # Local variables for speed
         pop_size = self.pop_size
         elitism_size = self.elitism_size
         tournament_size = self.tournament_size
@@ -154,6 +159,7 @@ class ThiefSolver:
             
             scored_pop.sort(key=lambda x: x[0])
             
+            # Elitism & Improvement Check
             if scored_pop[0][0] < best_fitness:
                 best_fitness = scored_pop[0][0]
                 best_genome = copy.deepcopy(scored_pop[0][1])
@@ -161,13 +167,38 @@ class ThiefSolver:
                 current_mutation_rate = self.mutation_rate
             else:
                 generations_without_improvement += 1
-                if generations_without_improvement >= 100 and current_mutation_rate < 0.6:
-                    current_mutation_rate += 0.1
-                    generations_without_improvement = 0
             
-            # Print progress every 50 gens to keep output clean but visible
-            # if (gen + 1) % 50 == 0:
-            #     print(f"Gen {gen+1}/{self.generations} - Best: {best_fitness:,.2f}")
+            # --- CATACLYSM / PERTURBATION STRATEGY ---
+            # If stuck for 50 generations, trigger a massive shake-up
+            if generations_without_improvement >= 50:
+                print(f"   -> Stagnation detected (Gen {gen+1}). Triggering Perturbation!")
+                
+                # Keep Elites (Top 2)
+                new_pop = [copy.deepcopy(x[1]) for x in scored_pop[:elitism_size]]
+                
+                # Strategy: 50% Mutated Clones of Best, 50% Random
+                num_mutated = (pop_size - elitism_size) // 2
+                
+                # Add Heavily Mutated Clones of the Best
+                best_ind = scored_pop[0][1]
+                for _ in range(num_mutated):
+                    clone = copy.deepcopy(best_ind)
+                    # Apply multiple mutations to "shake" it
+                    self._scramble_mutation(clone) # Stronger than inversion
+                    self._mutate(clone)
+                    new_pop.append(clone)
+                
+                # Add Pure Random Individuals (Fresh Blood)
+                while len(new_pop) < pop_size:
+                    new_pop.append(random.sample(cities, len(cities)))
+                
+                population = new_pop
+                generations_without_improvement = 0 # Reset counter
+                continue # Skip standard selection/crossover for this gen
+
+            # Standard Evolution
+            if (gen + 1) % 50 == 0:
+                print(f"Gen {gen+1}/{self.generations} - Best: {best_fitness:,.2f}")
 
             new_pop = [copy.deepcopy(x[1]) for x in scored_pop[:elitism_size]]
             
@@ -179,18 +210,20 @@ class ThiefSolver:
                 
                 child = self._ox1(p1, p2)
                 if random.random() < current_mutation_rate:
-                    size = len(child)
-                    a, b = sorted(random.sample(range(size), 2))
-                    child[a:b+1] = child[a:b+1][::-1]
+                    self._mutate(child)
                 new_pop.append(child)
             
             population = new_pop
 
-        # RECONSTRUCTION WITH YOUR PRINTS
-        best_logical_path = self._reconstruct_logical_path(best_genome)        
-        # This will now use the cache and should be instant
+        # RECONSTRUCTION
+        # print("GEN END")
+        # print("START RECONSTRUCTION LOGICAL")
+        best_logical_path = self._reconstruct_logical_path(best_genome)
+        # print("END RECONSTRUCTION LOGICAL")
+        
+        # print("START RECONSTRUCTION PHYSICAL")
         physical_path = self._reconstruct_physical_path(best_logical_path)
-        print("getSolution COMPLETE")
+        # print("END RECONSTRUCTION PHYSICAL")
         
         return physical_path
 
@@ -237,29 +270,18 @@ class ThiefSolver:
         return logical_path
 
     def _reconstruct_physical_path(self, logical_path):
-        """
-        Reconstructs the physical path using the CACHED shortest paths.
-        This avoids running Dijkstra 1000 times.
-        """
         physical_path = []
         current_node = 0
         
         for target in logical_path:
             if target == current_node: continue
-            
-            # INSTANT LOOKUP from Cache
-            # self.path_cache[start][end] returns the list of nodes [start, ..., end]
             segment = self.path_cache[current_node][target]
-            
             for node in segment[1:]:
-
                 gold_val = 0.0
                 if node == target and node != 0:
                     gold_val = float(round(self.gold_map_list[node], 2))
                 physical_path.append((int(node), gold_val))
-
             current_node = target
-
         
         if not physical_path or physical_path[-1][0] != 0:
             physical_path.append((0, 0.0))
@@ -270,7 +292,6 @@ class ThiefSolver:
         a, b = sorted(random.sample(range(size), 2))
         child = [-1] * size
         child[a:b] = p1[a:b]
-        
         child_set = set(p1[a:b])
         p2_ptr = 0
         for i in range(size):
@@ -281,3 +302,17 @@ class ThiefSolver:
                 child[i] = val
                 child_set.add(val)
         return child
+
+    def _mutate(self, ind):
+        """Standard Inversion Mutation"""
+        size = len(ind)
+        a, b = sorted(random.sample(range(size), 2))
+        ind[a:b+1] = ind[a:b+1][::-1]
+
+    def _scramble_mutation(self, ind):
+        """Scramble Mutation: Randomly shuffles a segment"""
+        size = len(ind)
+        a, b = sorted(random.sample(range(size), 2))
+        sub = ind[a:b+1]
+        random.shuffle(sub)
+        ind[a:b+1] = sub
