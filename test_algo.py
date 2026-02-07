@@ -11,7 +11,7 @@ logging.basicConfig(level=logging.INFO, format='%(message)s')
 
 # --- CONFIGURATION FOR SAVING RESULTS ---
 test_dir = "tests"
-test_filename = "results.csv"
+test_filename = "results_perturb.csv"
 test_path = os.path.join(test_dir, test_filename)
 
 def save_result_to_csv(result_dict, output_dir="tests", filename="results.csv"):
@@ -92,15 +92,27 @@ def run_benchmarks():
         {"N": 100,  "d": 0.2, "a": 1, "b": 1},
         {"N": 100,  "d": 0.2, "a": 2, "b": 1},
         {"N": 100,  "d": 0.2, "a": 1, "b": 2},
+        {"N": 100,  "d": 0.2, "a": 1, "b": 0.5},
         {"N": 100,  "d": 1, "a": 1, "b": 1},
         {"N": 100,  "d": 1, "a": 2, "b": 1},
         {"N": 100,  "d": 1, "a": 1, "b": 2},
+        {"N": 100,  "d": 1, "a": 1, "b": 0.5},
+        {"N": 400,  "d": 0.2, "a": 1, "b": 1},
+        {"N": 400,  "d": 0.2, "a": 2, "b": 1},
+        {"N": 400,  "d": 0.2, "a": 1, "b": 2},
+        {"N": 400,  "d": 0.2, "a": 1, "b": 0.5},
+        {"N": 400,  "d": 1, "a": 1, "b": 1},
+        {"N": 400,  "d": 1, "a": 2, "b": 1},
+        {"N": 400,  "d": 1, "a": 1, "b": 2},
+        {"N": 400,  "d": 1, "a": 1, "b": 0.5},
         {"N": 1_000,  "d": 0.2, "a": 1, "b": 1},
         {"N": 1_000,  "d": 0.2, "a": 2, "b": 1},
         {"N": 1_000,  "d": 0.2, "a": 1, "b": 2},
+        {"N": 1_000,  "d": 0.2, "a": 1, "b": 0.5},
         {"N": 1_000,  "d": 1, "a": 1, "b": 1},
         {"N": 1_000,  "d": 1, "a": 2, "b": 1},
         {"N": 1_000,  "d": 1, "a": 1, "b": 2},
+        {"N": 1_000,  "d": 1, "a": 1, "b": 0.5},
     ]
 
     if os.path.exists(test_path):

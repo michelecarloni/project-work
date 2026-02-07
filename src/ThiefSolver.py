@@ -99,7 +99,7 @@ class ThiefSolver:
         # PARAMETER TUNING
         # Increased Pop Size for better exploration since we have speed now
         self.pop_size = 200 if self.num_nodes <= 100 else 150 
-        self.generations = 1000 if self.num_nodes <= 100 else 600
+        self.generations = 1000 if self.num_nodes <= 100 else 800
         self.mutation_rate = 0.2
         self.elitism_size = 2
         self.tournament_size = 5
@@ -170,8 +170,8 @@ class ThiefSolver:
             
             # --- CATACLYSM / PERTURBATION STRATEGY ---
             # If stuck for 50 generations, trigger a massive shake-up
-            if generations_without_improvement >= 50:
-                print(f"   -> Stagnation detected (Gen {gen+1}). Triggering Perturbation!")
+            # if generations_without_improvement >= 50:
+            #     print(f"   -> Stagnation detected (Gen {gen+1}). Triggering Perturbation!")
                 
                 # Keep Elites (Top 2)
                 new_pop = [copy.deepcopy(x[1]) for x in scored_pop[:elitism_size]]
@@ -216,14 +216,8 @@ class ThiefSolver:
             population = new_pop
 
         # RECONSTRUCTION
-        # print("GEN END")
-        # print("START RECONSTRUCTION LOGICAL")
-        best_logical_path = self._reconstruct_logical_path(best_genome)
-        # print("END RECONSTRUCTION LOGICAL")
-        
-        # print("START RECONSTRUCTION PHYSICAL")
+        best_logical_path = self._reconstruct_logical_path(best_genome)        
         physical_path = self._reconstruct_physical_path(best_logical_path)
-        # print("END RECONSTRUCTION PHYSICAL")
         
         return physical_path
 
