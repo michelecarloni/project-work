@@ -78,7 +78,7 @@ class ThiefSolver:
                    ending with (0, 0) to indicate return to base
         """
         start_time = time.time()
-        TIME_LIMIT = 90  # 90 seconds time limit
+        TIME_LIMIT = 10
         
         # Filter cities for difficult problems
         self.profitable_cities = self.filter_profitable_cities()
