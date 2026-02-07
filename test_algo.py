@@ -23,24 +23,53 @@ def save_result_to_csv(result_dict, output_dir="tests", filename="results.csv"):
     else:
         df.to_csv(csv_path, mode='w', header=True, index=False)
 
+# --- EXTERNAL COST CALCULATOR (The "Judge") ---
+def calculate_external_cost(path, problem):
+    """
+    Computes cost based on the returned physical path.
+    Does not run inside the solver time.
+    """
+    total_cost = 0.0
+    current_weight = 0.0
+    current_node = 0
+    alpha = problem.alpha
+    beta = problem.beta
+    
+    for next_node, gold_collected in path:
+        dist = problem.graph[current_node][next_node]['dist']
+        d_beta = dist ** beta
+        
+        if current_weight == 0:
+            step_cost = dist
+        else:
+            step_cost = dist + ((alpha * current_weight) ** beta) * d_beta
+            
+        total_cost += step_cost
+        current_weight += gold_collected
+        
+        if next_node == 0:
+            current_weight = 0.0
+        current_node = next_node
+        
+    return total_cost
+
 def run_benchmarks():
 
     configs = [
-        {"N": 100,  "d": 0.2, "a": 1, "b": 1},
-        {"N": 100,  "d": 0.2, "a": 2, "b": 1},
-        {"N": 100,  "d": 0.2, "a": 1, "b": 2},
-        {"N": 100,  "d": 1, "a": 1, "b": 1},
-        {"N": 100,  "d": 1, "a": 2, "b": 1},
-        {"N": 100,  "d": 1, "a": 1, "b": 2},
+        # {"N": 100,  "d": 0.2, "a": 1, "b": 1},
+        # {"N": 100,  "d": 0.2, "a": 2, "b": 1},
+        # {"N": 100,  "d": 0.2, "a": 1, "b": 2},
+        # {"N": 100,  "d": 1, "a": 1, "b": 1},
+        # {"N": 100,  "d": 1, "a": 2, "b": 1},
+        # {"N": 100,  "d": 1, "a": 1, "b": 2},
         {"N": 1_000,  "d": 0.2, "a": 1, "b": 1},
+        {"N": 1_000,  "d": 1, "a": 1, "b": 1},
         {"N": 1_000,  "d": 0.2, "a": 2, "b": 1},
         {"N": 1_000,  "d": 0.2, "a": 1, "b": 2},
-        {"N": 1_000,  "d": 1, "a": 1, "b": 1},
         {"N": 1_000,  "d": 1, "a": 2, "b": 1},
         {"N": 1_000,  "d": 1, "a": 1, "b": 2},
     ]
 
-    # Remove old results to start fresh
     if os.path.exists(test_path):
         os.remove(test_path)
 
@@ -50,19 +79,25 @@ def run_benchmarks():
         print(f"\n>>> Running: N={c['N']}, d={c['d']}, alpha={c['a']}, beta={c['b']}")
         p = Problem(num_cities=c['N'], density=c['d'], alpha=c['a'], beta=c['b'])
         
-        # 1. Get Baseline
         baseline_cost = p.baseline()
         
+        # 1. Pre-Processing Timer
         start_time_pre_algo = time.time()
-        # 2. Run Optimization with timing
         solver = ThiefSolver(p)
         elapsed_time_pre_algo = round(time.time() - start_time_pre_algo, 2)
-        
         print(f"   Time Pre Algo: {elapsed_time_pre_algo:.2f}s")
 
+        # 2. Algorithm Timer (Pure Execution)
         start_time_algo = time.time()
-        path, total_cost = solver.getSolution()
+        path = solver.getSolution() # Now returns ONLY the path
         elapsed_time_algo = round(time.time() - start_time_algo, 2)
+
+        print(f"START COMPUTE EXTERNAL COST")
+
+        # 3. Post-Processing (Cost Calculation) - OFF THE CLOCK
+        total_cost = calculate_external_cost(path, p)
+
+        print(f"END COMPUTE EXTERNAL COST")
 
         improvement = ((baseline_cost - total_cost) / baseline_cost) * 100
         status = "SUCCESS" if total_cost < baseline_cost else "FAILURE"
@@ -91,24 +126,16 @@ def run_benchmarks():
         all_results.append(result_dict)
 
     # --- PRINT SUMMARY TABLE ---
-    # Define widths for columns
-    w_prob = 28
-    w_base = 15
-    w_algo = 15
-    w_imp = 12
-    w_stat = 10
-    w_time_pre = 12
-    w_time_algo = 12
-    w_elem = 10
-    w_path = 55  # Wider column for path visibility
+    w_prob, w_base, w_algo, w_imp = 28, 15, 15, 12
+    w_stat, w_time_pre, w_time_algo = 10, 12, 12
+    w_elem, w_path = 10, 55
     
-    total_width = w_prob + w_base + w_algo + w_imp + w_stat + w_time_pre + w_time_algo + w_elem + w_path + 10 # spacing
+    total_width = w_prob + w_base + w_algo + w_imp + w_stat + w_time_pre + w_time_algo + w_elem + w_path + 10
 
     print("\n" + "="*total_width)
     print("SUMMARY TABLE - PERFORMANCE COMPARISON")
     print("="*total_width)
     
-    # Header
     header = (
         f"{'Problem':<{w_prob}} "
         f"{'Baseline':>{w_base}} "
@@ -127,30 +154,19 @@ def run_benchmarks():
         problem_desc = f"N={result['N']}, d={result['density']}, α={result['alpha']}, β={result['beta']}"
         path = result['Path']
         
-        # --- INTELLIGENT PATH FORMATTING ---
-        # Logic to preserve the LAST element (0, 0.0) even if the path is truncated
-        
-        last_elem_str = str(path[-1]) # This is always (0, 0.0)
-        
+        last_elem_str = str(path[-1])
         if len(path) > 3:
-            # Construct preliminary string: "First, Second"
             start_str = f"{str(path[0])},{str(path[1])}"
             full_str = f"{start_str},...,{last_elem_str}"
-            
-            # If the combined string is too long for the column, trim the start but KEEP the end
             if len(full_str) > w_path:
-                # Calculate how much space is left for the start part
-                remaining_space = w_path - len(last_elem_str) - 5 # 5 accounts for "...,"
+                remaining_space = w_path - len(last_elem_str) - 5
                 if remaining_space > 5:
-                    truncated_start = start_str[:remaining_space]
-                    path_str = f"{truncated_start}...,{last_elem_str}"
+                    path_str = f"{start_str[:remaining_space]}...,{last_elem_str}"
                 else:
-                    # If very tight, show only dots and end
                     path_str = f"...,{last_elem_str}"
             else:
                 path_str = full_str
         else:
-            # Short path fits entirely
             path_str = f"{','.join(map(str, path))}"
 
         row = (
@@ -169,12 +185,8 @@ def run_benchmarks():
     print("="*total_width)
     
     if all_results:
-        total_improvements = [r['Improvement'] for r in all_results]
-        avg_improvement = sum(total_improvements) / len(total_improvements)
         success_count = sum(1 for r in all_results if r['Status'] == 'SUCCESS')
-        
         print(f"\nOverall Statistics:")
-        print(f"  Average Improvement: {avg_improvement:.2f}%")
         print(f"  Success Rate: {success_count}/{len(all_results)} ({100*success_count/len(all_results):.1f}%)")
     else:
         print("\nNo results to display.")

@@ -8,5 +8,5 @@ def solution(p:Problem):
     """
     solver = ThiefSolver(problem=p)
 
-    path, cost = solver.getSolution()
+    path = solver.getSolution()
     return path
