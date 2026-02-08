@@ -116,7 +116,7 @@ class ThiefSolver:
     - Greedy Heuristic for deciding whether using the EXTEND or SPLIT strategy.
     """
 
-    def __init__(self, problem):
+    def __init__(self, problem, output_dir="logs"):
         # Initialization of all the important attributes for the class
         self.problem = problem
         self.graph = problem.graph
@@ -124,6 +124,8 @@ class ThiefSolver:
         self.density = nx.density(self.graph)
         self.alpha = self.problem.alpha
         self.beta = self.problem.beta
+
+        self.output_dir = output_dir
         
         # OPTIMIZATION 1: cache gold values
         # Accessing list[i] is much faster than graph.nodes[i]['gold']
@@ -217,7 +219,7 @@ class ThiefSolver:
 
         # CSV CONFIG
         csv_filename = f"prob_{self.num_nodes}_{round(self.density, 1)}_{round(self.alpha, 1)}_{round(self.beta, 1)}.csv"
-        csv_dir = "tests"
+        csv_dir = self.output_dir
         if not os.path.exists(csv_dir):
             os.makedirs(csv_dir)
         csv_path = os.path.join(csv_dir, csv_filename)
