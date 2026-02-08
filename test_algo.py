@@ -2,14 +2,14 @@ import logging
 import pandas as pd
 import os
 import time
-import numpy as np  # Required for the fast cost calculator
+import numpy as np 
 from Problem import Problem
 from src.ThiefSolver import ThiefSolver
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format='%(message)s')
 
-# --- CONFIGURATION FOR SAVING RESULTS ---
+# CSV CONFIG
 test_dir = "tests"
 test_filename = "results_perturb.csv"
 test_path = os.path.join(test_dir, test_filename)
@@ -24,7 +24,7 @@ def save_result_to_csv(result_dict, output_dir="tests", filename="results.csv"):
     else:
         df.to_csv(csv_path, mode='w', header=True, index=False)
 
-# --- EXTERNAL COST CALCULATOR (Optimized with NumPy) ---
+# external cost calculator
 def calculate_external_cost(path, problem):
     """
     Computes cost using Vectorized NumPy operations.
@@ -33,7 +33,7 @@ def calculate_external_cost(path, problem):
     if not path:
         return 0.0
 
-    # 1. Data Preparation
+    # 1 - data preparation
     # Convert path to arrays for fast processing
     # path structure is list of tuples: [(next_node, gold_collected), ...]
     path_data = np.array(path, dtype=object)
@@ -41,21 +41,21 @@ def calculate_external_cost(path, problem):
     golds = path_data[:, 1].astype(float)
     
     # Reconstruct the sequence of visited nodes: [0, n1, n2, ..., 0]
-    # We prepend 0 because the thief always starts at the base
+    # prepend 0 because the thief always starts at the base
     visited_nodes = np.insert(next_nodes, 0, 0)
     
-    # 2. Vectorized Distance Lookup
-    # We use a list comprehension which is the fastest way to extract data from NetworkX
+    # 2 - vectorized distance lookup
+    # use a list comprehension which is the fastest way to extract data
     g = problem.graph
     dists = np.array([g[u][v]['dist'] for u, v in zip(visited_nodes[:-1], visited_nodes[1:])])
     
-    # 3. Vectorized Weight Calculation
-    # We need to calculate cumulative weight, but it RESETS to 0 every time we hit node 0.
-    # We split the path into "trips" (segments ending at 0) and calculate cumsum for each.
+    # 3 - vectorized weight calculation
+    # calculate cumulative weight, but it resets to 0 every time we hit node 0.
+    # split the path into "trips" (segments ending at 0) and calculate cumsum for each.
     weights = np.zeros(len(dists))
     
-    # Find where the trips end (where next_node is 0)
-    # We iterate over these segments - this is very fast as there are few trips compared to nodes
+    # find where the trips end (where next_node is 0)
+    # iterate over these segments
     trip_end_indices = np.where(next_nodes == 0)[0]
     start_idx = 0
     
@@ -63,26 +63,23 @@ def calculate_external_cost(path, problem):
         # Get gold for this specific trip
         segment_gold = golds[start_idx : end_idx + 1]
         
-        # Calculate cumulative weight
-        # We start with 0, then add gold[0], then gold[0]+gold[1]...
-        # np.cumsum gives [g0, g0+g1...]. We shift it right by 1 to get the weight *before* the step.
+        # compute cumulative weight
+        # start with 0, then add gold[0], then gold[0]+gold[1]...
+        # 
         cum_gold = np.cumsum(segment_gold)
         segment_weights = np.roll(cum_gold, 1)
-        segment_weights[0] = 0.0 # First step of any trip carries 0 weight
+        segment_weights[0] = 0.0
         
         weights[start_idx : end_idx + 1] = segment_weights
         start_idx = end_idx + 1
 
-    # 4. Vectorized Cost Formula
-    # Cost = dist + (alpha * weight)^beta * dist^beta
+    # 4 - vectorized cost formula
     alpha = problem.alpha
     beta = problem.beta
     
-    # Pre-calculate powers for the whole array at once
     dist_beta = dists ** beta
     weight_term = (alpha * weights) ** beta
     
-    # Final formula applied to all steps simultaneously
     step_costs = dists + (weight_term * dist_beta)
     
     return np.sum(step_costs)
